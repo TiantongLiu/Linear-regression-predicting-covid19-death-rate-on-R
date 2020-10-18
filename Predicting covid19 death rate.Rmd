@@ -1,0 +1,227 @@
+---
+title: "Linear regression predicting covid19 death rate"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r}
+library(car)
+library(psych)
+library(ggplot2)
+library(lmtest)
+library(nortest)
+mydata<-read.csv("flInfo.csv")
+
+newdata<-read.csv("https://www2.census.gov/programs-surveys/popest/datasets/2010-2019/counties/asrh/cc-est2019-agesex-12.csv")
+```
+```{r}
+
+library(sqldf)
+#Select the total population and population of age65+ for 2019(Year=10)
+mydata2<-sqldf("SELECT CTYNAME, POPESTIMATE, AGE65PLUS_TOT, POPEST_MALE, POPEST_FEM
+      FROM newdata 
+      WHERE YEAR=10")
+```
+```{r}
+#calculate the old age rate for these countries
+mydata2$ElderlyRate<-mydata2$AGE65PLUS_TOT/mydata2$POPESTIMATE
+#calculate the gender rate for these countries(Male Population/Female Population*100%)
+mydata2$GenderRate<-mydata2$POPEST_MALE/mydata2$POPEST_FEM
+
+
+```
+```{r}
+#reformating the name of countries
+mydata2$CITYYNAME = as.character(mydata2$CTYNAME)
+mydata2$admin <- substr(mydata2$CTYNAME,0, nchar(mydata2$CITYYNAME)-7)
+```
+```{r}
+#Join the two tables
+mydata<-sqldf("SELECT * 
+              FROM mydata2,mydata
+              WHERE mydata2.admin=mydata.Admin2")
+```
+```{r}
+#remove the duplicate
+mydata<-mydata[,-c(1,8)]
+```
+```{r}
+unemploymentdata<-read.csv("https://raw.githubusercontent.com/dawnzyf/Florida-unemployment-dataset/main/LFS_cnty.csv",skip = 6)
+```
+```{r}
+#SELECT data of 2020 Aug
+unemploymentdata<-unemploymentdata[1:67,1:5]
+```
+```{r}
+#Formatting county name
+unemploymentdata$COUNTY = as.character(unemploymentdata$COUNTY)
+unemploymentdata$COUNTY<-substr(unemploymentdata$COUNTY,0,nchar(unemploymentdata$COUNTY)-7)
+```
+```{r}
+#join into dataset
+mydata<-sqldf("SELECT * 
+              FROM unemploymentdata,mydata
+              WHERE mydata.Admin2=unemploymentdata.COUNTY")
+```
+
+
+```{r}
+#View datatype
+str(mydata)
+```
+```{r}
+#Remove duplicate
+mydata<-mydata[,c(-12,-13)]
+```
+```{r}
+#rename column
+colnames(mydata)[c(3,4,5)]<-c("Labor","UnemploymentPOP","UnemployRate")
+```
+```{r}
+#View data
+head(mydata)
+```
+```{r}
+library(ggplot2)
+ggplot(mydata)+geom_point(aes(x=ElderlyRate,y=lethality))
+
+#drop catagorical variables
+df<-mydata[,-c(1,13,14,15,20,22)]
+df<-df[,-c(10,11,12,17,16)]
+#display descriptive statistics of all variables
+summary(df)
+
+library(gridExtra)
+p1<-ggplot(mydata,aes(x=Labor))+geom_density(colour="black", fill="#FF6666",alpha=0.2)
+p2<-ggplot(mydata,aes(x=FORCE))+geom_density(color="black",alpha=.2, fill="#FF6666")
+p3<-ggplot(mydata,aes(x=UnemployRate))+geom_density(color="black",alpha=.2, fill="#FF6666")
+p4<-ggplot(mydata,aes(x=ElderlyRate))+geom_density(color="black",alpha=.2, fill="#FF6666")
+p5<-ggplot(mydata,aes(x=GenderRate))+geom_density(color="black",alpha=.2, fill="#FF6666")
+p6<-ggplot(mydata,aes(x=Confirmed))+geom_density(color="black",alpha=.2, fill="#FF6666")
+p7<-ggplot(mydata,aes(x=Incidence_Rate))+geom_density(color="black",alpha=.2, fill="#FF6666")
+p8<-ggplot(mydata,aes(x=Population))+geom_density(color="black",alpha=.2, fill="#FF6666")
+p9<-ggplot(mydata,aes(x=DeathsPerCap))+geom_density(color="black",alpha=.2, fill="#FF6666")
+p10<-ggplot(mydata,aes(x=PopDensity))+geom_density(color="black",alpha=.2, fill="#FF6666")
+p11<-ggplot(mydata,aes(x=POPESTIMATE))+geom_density(color="black",alpha=.2, fill="#FF6666")
+p12<-ggplot(mydata,aes(x=SqMiles))+geom_density(color="black",alpha=.2, fill="#FF6666")
+grid.arrange(p1,p2,p3,p4,p5,p6,p7,p8,p9,p10,p11,p12,ncol=4)
+
+```
+display the correlation within variables
+```{r}
+library(pheatmap)
+#create matrix of correlation
+matrix<-cor(df)
+#display the heatmap
+pheatmap(matrix,cellwidth=10,cellheight =10)
+
+#Playing around with Model
+#COVID has a high death rate among older individuals, testing it
+Deaths = lm((Deaths/Confirmed) ~ ElderlyRate, mydata)
+summary(Deaths)
+
+#Testing Population Density as an added factor, since it would be more likely to be transmitted
+Deaths = lm((Deaths/Confirmed) ~ ElderlyRate + PopDensity , mydata)
+summary(Deaths)
+# P Values are well below 0.05, meaning these two factors are significant in predicting Death Rates
+
+#Adding a third factor, UnemployRate
+Deaths = lm((Deaths/Confirmed) ~ ElderlyRate + PopDensity + UnemployRate, mydata)
+summary(Deaths)
+#After testing it, UnemployRate has a P Value of .36, next model it will be removed
+
+#Showing "Leakage" 
+Deaths = lm((Deaths/Confirmed) ~ ElderlyRate + PopDensity + lethality, mydata)
+summary(Deaths)
+#As seen here, adding lethality results in a perfect R square, since it goes hand in hand with Death Rate
+
+#Many variables
+Deaths = lm((Deaths/Confirmed) ~ UnemployRate + ElderlyRate + PopDensity, mydata)
+summary(Deaths)
+
+#With our current set of data, we found that the two factors below are the best predictors
+Deaths = lm((Deaths/Confirmed) ~ ElderlyRate + PopDensity, mydata)
+summary(Deaths)
+```
+```{r}
+lithalitymod<- lm(log(mydata$lethality)~log(mydata$ElderlyRate)+log(mydata$PopDensity))
+summary(lithalitymod)
+
+y_hat <- predict(lithalitymod, se.fit = TRUE)
+mydata$predictions <- y_hat$fit
+mydata$residuals <- lithalitymod$residuals
+ObsNum <- 1:(length(mydata$lethality))
+mydata$ObsNum <- ObsNum
+
+
+
+#Assumption 1: There is a linear relationship
+#between the dependent variable Y and the independent variable X
+ggplot(data = mydata, aes(predictions, lethality)) +
+geom_point()+geom_smooth(method = "lm")
+```
+
+```{r}
+#Assumption 2: Residuals are independent.
+residualmod <- lm(residuals~ObsNum, mydata)
+summary(residualmod)
+
+ggplot(data = mydata, aes(ObsNum, residuals))+geom_point()
+ggplot(data = mydata, aes(ObsNum, residuals))+geom_point()+geom_smooth(method = "lm")
+
+```
+
+```{r}
+#Assumption 3: Constant variance
+library(car)
+ncvTest(lithalitymod)
+bptest(lithalitymod, varformula = NULL, studentize = TRUE, data = lithalitymod$model())
+ggplot(mydata, aes(predictions, residuals))+geom_point()
+ggplot(mydata, aes(predictions, residuals))+geom_point()+geom_smooth(method = "lm")
+
+```
+```{r}
+#Normality of residuals
+ggplot(data = mydata, aes(x=residuals)) + geom_histogram(bins=10, col="white")
+
+ggplot(data = mydata, aes(x=residuals)) +
+  geom_histogram(aes(y=..density..), bins=10, col="white") +
+  geom_density(aes(y=..density..), colour="red")
+
+```
+
+```{r}
+#Normality of residuals cont
+ggplot(mydata, aes(sample=residuals))+
+stat_qq()
+# base r qqplot
+layout(matrix(c(1,1)))
+qqnorm(mydata$residuals, pch = 1, frame = FALSE)
+qqline(mydata$residuals, col = "steelblue", lwd = 2)
+```
+```{r}
+# statistical test for normality
+shapiro.test(mydata$residuals)
+ad.test(mydata$residuals)
+```
+```{r}
+#Check multicollinearity
+
+vif(lithalitymod)
+#Check high leverage data points
+cooksd <- data.frame(cooks.distance(lithalitymod))
+cooks.distance(lithalitymod) > 4 / length(cooks.distance(lithalitymod))
+cooksd$hiLev <- cooks.distance(lithalitymod) > 4 / length(cooks.distance(lithalitymod))
+```
+```{r}
+#plot of model
+plot(lithalitymod)
+
+
+
+
+
+
+
+
